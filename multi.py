@@ -2,6 +2,7 @@ import json
 import socket
 import threading
 from json import JSONDecodeError
+from urllib.request import parse_keqv_list
 from warnings import warn
 
 from colorama import Fore, Back, Style
@@ -37,18 +38,19 @@ class EventRegistry:
         """
         return self._events.get(event_name)
 
-    def trigger(self, event_name, *args, **kwargs):
+    def trigger(self, event_name, sock, *args):
         """
         Trigger an event
+        :param sock: the reference of the outcoming socket packet's
         :param event_name: The name of the event
         """
         handlers = self._events.get(event_name, [])  # Check if the event name contain functions or not
         if handlers:
             for handler in handlers:
                 try:
-                    handler(*args, **kwargs)
+                    handler(sock, *args)
                 except TypeError:
-                    handler()
+                    handler(sock)
         else:
             warn(f"The handler for '{event_name}' is not found ! It may be normal, ignore then.")
 
@@ -65,7 +67,7 @@ server_event_registry = EventRegistry()
 
 class Packet:
     @staticmethod
-    def create_packet(name: str, content: dict):
+    def create_packet(name: str, *content):
         """
         Create a packet and encode it
         :param name: Name of the packet/event
@@ -106,9 +108,9 @@ class Client:
             self.client.connect((self.ip, self.port))
             self.is_connected = True
 
-            threading.Thread(target=self.listen, daemon=True)
-            client_event_registry.trigger("connection")
-
+            threading.Thread(target=self.listen, daemon=True).start()
+            client_event_registry.trigger("connection", self.client) # Trigger connection event
+            print("OK")
         except ConnectionRefusedError:
             Client.print_client("The server is unreachable !")
         except socket.gaierror:
@@ -120,38 +122,46 @@ class Client:
         """
         Thread that listen for new content from the server
         """
+        try:
+            while self.is_connected:
+                try:
+                    packet = self.client.recv(self.buffer_size)
+                    if packet:
+                        packet_name, contents = Packet.decode_packet(packet)
+                        if packet_name == "server_stop":
+                            Client.print_client("Server stopped !")
+                            break
+                        client_event_registry.trigger(packet_name, self.client, *contents) # Trigger the event linked to the message of the server
+                    else:
+                        Client.print_client("The server send an empty packet ! Closing...")
+                        break
+                except ConnectionResetError:
+                    Client.print_client("Connexion lost !")
+        finally:
+            Client.print_client("Client close !")
+            self.disconnect()
 
-        while self.is_connected:
-            try:
-                packet = self.client.recv(self.buffer_size)
-
-                if packet:
-                    packet_name, contents = Packet.decode_packet(packet)
-                    client_event_registry.trigger(packet_name, contents)
-                else:
-                    warn("The server send an empty packet !")
-            except ConnectionResetError:
-                Client.print_client("Connexion lost !")
-                self.client.close()
-
-    def send(self, packet_name: str, content: dict):
+    def send(self, packet_name: str, *content):
         """
         Send a content to the server
         :param packet_name: The name of the packet
         :param content: contents
         """
         if self.is_connected:
-            packet = Packet.create_packet(packet_name, content)
+            packet = Packet.create_packet(packet_name, *content)
             self.client.send(packet)
 
     def disconnect(self):
         """
         Call to disconnect the user
         """
-        self.send("client_disconnection", {"addr": self.client.getpeername()})
-        self.client.close()
-        self.is_connected = False
-        client_event_registry.trigger("disconnection")
+        try:
+            self.send("client_disconnection", self.client.getpeername())
+        finally:
+            self.client.close()
+            self.is_connected = False
+            client_event_registry.trigger("disconnection", self.client)
+            Client.print_client("Client close and disconnect from the server !")
 
     @staticmethod
     def print_client(msg):
@@ -196,11 +206,12 @@ class Server:
         Stop the server
         """
         self.is_online = False
-        for client in self.clients:
-            client.send(Packet.create_packet("server_stop"))
+        packet = Packet.create_packet("server_stop")
+        for client in self.clients.values():
+            client.send(packet)
             Server.print_server(f"The client: {client.getpeername()} is disconnect !")
             client.close()
-        Server.print_server("All player disconnected.")
+        Server.print_server("All clients disconnected.")
 
         if self.server:
             self.server.close()
@@ -208,11 +219,16 @@ class Server:
 
     def _accept_clients(self):
         """Thread that accept clients when they connect to the server"""
-        while self.is_online:
-            client_socket, addr = self.server.accept()
-            self.clients[addr] = client_socket
-            Server.print_server(f"Client connected on: {addr}")
-            threading.Thread(target=self._handle_client, args=(client_socket, addr), daemon=True).start()
+        try:
+            while self.is_online:
+                client_socket, addr = self.server.accept()
+                self.clients[addr] = client_socket
+                server_event_registry.trigger("client_connection", client_socket)
+                threading.Thread(target=self._handle_client, args=(client_socket, addr), daemon=True).start()
+        except KeyboardInterrupt:
+            self.stop_server()
+        finally:
+            Server.print_server("Server stop listening to new clients !")
 
     def _handle_client(self, client_socket, addr):
         """Thread that trigger event from packet recv from clients"""
@@ -220,41 +236,52 @@ class Server:
             while self.is_online:
                 try:
                     packet = client_socket.recv(self.buffer_size)
-                    print(f"Packet rcv: {packet.decode()}")
-                    packet_name, contents = Packet.decode_packet(packet)
-                    print(packet_name, " | ", contents)
-                    server_event_registry.trigger(packet_name, contents.values)
+                    if packet:
+                        packet_name, contents = Packet.decode_packet(packet)
+                        server_event_registry.trigger(packet_name, client_socket, *contents)
+                        if packet_name == "client_disconnection":
+                            break
+                    else:
+                        Server.print_server(f"A packet from: {addr} has been send with no data ! This is illegal closing the listening thread and the communication !")
+                        break
                 except ConnectionResetError:
                     Server.print_server(f"The client at add: {addr} has been disconnected ! This is an anomaly.")
+                    break
         finally:
             if addr in self.clients:
                 self.clients.pop(addr)
             client_socket.close()
             Server.print_server(f"The client: {addr} is disconnect !")
 
-    def send_to_all(self, packet_name, contents):
+    def send_to_all(self, packet_name, *contents):
         """
         Send a packet to all player
         :param packet_name: The name of the packet/event
         :param contents: Contents
         """
-        self.server.sendall(Packet.create_packet(packet_name, contents))
-
+        packet = Packet.create_packet(packet_name, *contents)
+        for client in self.clients.values():
+            print(packet)
+            client.send(packet)
 
 # Basic Event Registry
 
 # SERVER EVENTS
 @server_event_registry.on_event("client_disconnection")
-def on_client_disconnect(addr, *args):
-    Server.print_server(f"The client: {type(addr)} {args} disconnect itself ! (Client Side)")
+def on_client_disconnect(clt, *args):
+    Server.print_server(f"The client: {clt.getpeername()} disconnect itself ! (Client Side)")
+
+@server_event_registry.on_event("client_connection")
+def on_client_connect(clt, *args):
+    Server.print_server(f"Client connected on: {clt.getpeername()} !")
 
 
 # CLIENT EVENTS
 @client_event_registry.on_event("connection")
-def on_connection():
+def on_connection(clt, *args):
     Client.print_client("Client is connecting !")
 
 
 @client_event_registry.on_event("disconnection")
-def on_disconnection():
+def on_disconnection(clt, *args):
     Client.print_client("Client disconnecting.")
