@@ -1,3 +1,5 @@
+# THIS IS IN PRODUCTION DONT CARE ABOUT THINGS YOU SEE INTO THE README IT CHANGE REALLY OFTEN
+
 # Welcom on MultiRaven !
 
 MultiRaven is a simple python server socket that can handle client! He is build on sending Packet and triggering events !
