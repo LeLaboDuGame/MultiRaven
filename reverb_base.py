@@ -46,13 +46,16 @@ class EventRegistry:
         """
         handlers = self._events.get(event_name, [])  # Check if the event name contain functions or not
         if handlers:
+            print("oergehr")
             for handler in handlers:
                 try:
-                    handler(sock, *args)
+                    threading.Thread(target=handler, args=(sock, *args), daemon=True).start()
                 except TypeError:
-                    handler(sock)
+                    threading.Thread(target=handler, args=sock, daemon=True).start()
         else:
             warn(f"The handler for '{event_name}' is not found ! It may be normal, ignore then.")
+
+        print("FINISHED TRIGGER")
 
     def all_events(self):
         """
@@ -93,7 +96,7 @@ class Packet:
 
 
 class Client:
-    def __init__(self, ip="127.0.0.1", port=4444, buffer_size=1024):
+    def __init__(self, ip="127.0.0.1", port=8080, buffer_size=1024):
         self.buffer_size = buffer_size
         self.port = port
         self.ip = ip
@@ -126,6 +129,7 @@ class Client:
             while self.is_connected:
                 try:
                     packet = self.client.recv(self.buffer_size)
+                    print("OKKKKKKK:", packet)
                     if packet:
                         packet_name, contents = Packet.decode_packet(packet)
                         if packet_name == "server_stop":
@@ -138,7 +142,6 @@ class Client:
                 except ConnectionResetError:
                     Client.print_client("Connexion lost !")
         finally:
-            Client.print_client("Client close !")
             self.disconnect()
 
     def send(self, packet_name: str, *content):
@@ -155,13 +158,14 @@ class Client:
         """
         Call to disconnect the user
         """
-        try:
-            self.send("client_disconnection", self.client.getpeername())
-        finally:
-            self.client.close()
-            self.is_connected = False
-            client_event_registry.trigger("disconnection", self.client)
-            Client.print_client("Client close and disconnect from the server !")
+        if self.is_connected:
+            try:
+                self.send("client_disconnection", self.client.getpeername())
+            finally:
+                self.client.close()
+                self.is_connected = False
+                client_event_registry.trigger("disconnection", self.client)
+                Client.print_client("Client close and disconnect from the server !")
 
     @staticmethod
     def print_client(msg):
@@ -173,7 +177,7 @@ class Client:
 
 
 class Server:
-    def __init__(self, host="", port=4444, buffer_size=1024):
+    def __init__(self, host="", port=8080, buffer_size=1024):
         self.buffer_size = buffer_size
         self.host = host
         self.port = port
@@ -261,8 +265,13 @@ class Server:
         """
         packet = Packet.create_packet(packet_name, *contents)
         for client in self.clients.values():
-            print(packet)
-            client.send(packet)
+            client.sendall(packet)
+
+
+    @staticmethod
+    def send_to(clt:socket.socket, packet_name, *contents):
+        packet = Packet.create_packet(packet_name, *contents)
+        clt.sendall(packet)
 
 # Basic Event Registry
 

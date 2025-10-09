@@ -5,8 +5,9 @@ MultiRaven is a simple python server socket that can handle client! He is build 
 ## How To use it:
 ## Server Side:
 ### Starting the server:
+
 ```python
-from multi import Server, server_event_registery
+from reverb_base import Server, server_event_registery
 
 server = Server(host="", port=4444)
 server.start_server()
@@ -34,10 +35,12 @@ This will be trigger each tiME the client send a message with packet name: "hell
 
 ## Client Side:
 ### Connect with a client:
+
 ```python
-from multi import Client, client_event_registery
+from reverb_base import Client, client_event_registery
+
 client = client(ip="127.0.0.1", port=4444)
-client.connect() # connecting to the server
+client.connect()  # connecting to the server
 ```
 
 ### To send a msg/data:
@@ -52,7 +55,7 @@ def hello_server(clt, msg, *args):
   print(f"You rcved a msg: {msg}")
 ```
 
-### Disconnecting the clien:
+### Disconnecting the client:
 ```python
 client.disconnect()
 ```
