@@ -1,67 +1,209 @@
-# THIS IS IN PRODUCTION DONT CARE ABOUT THINGS YOU SEE INTO THE README IT CHANGE REALLY OFTEN
+# 🎵 Reverb – Multiplayer Game Networking Framework in Python
 
-# Welcom on MultiRaven !
+**Reverb** is an object-oriented networking framework designed to make it easy to create **multiplayer games or applications in Python**.  
+It provides an abstraction layer over TCP sockets and automatically handles:
 
-MultiRaven is a simple python server socket that can handle client! He is build on sending Packet and triggering events !
+✅ Client/Server connections  
+✅ Object synchronization (shared state)  
+✅ Server-side function calls from clients  
+✅ A simple and extensible event system  
+✅ A global object registry (`ReverbObject`)
 
-## How To use it:
-## Server Side:
-### Starting the server:
+---
+
+## ✨ Key Features
+
+- 🔌 **Client/Server architecture** using TCP sockets  
+- 📦 Simple protocol using **JSON + binary length header**  
+- 🧠 Event system (`server_event_registry` / `client_event_registry`)  
+- 🔄 Base class **ReverbObject** for synchronized objects  
+- 🆔 Automatic **UID management** for objects  
+- 🔁 Server → client synchronization (`server_sync()`)  
+- 📡 Remote function calls to the server (`compute_server(...)`)  
+- 🧭 Detect object ownership (`is_owner()`)  
+- 🧱 Clear and extensible API  
+
+---
+
+## 📦 Installation
+
+Currently, Reverb is included directly in the project.  
+Include the following files in your project:
+
+
+
+> A pip package may be released in the future.
+
+---
+
+## 🚀 Minimal Usage Example
+
+### 1) Select Client or Server
 
 ```python
-from reverb_base import Server, server_event_registery
+from reverb import ReverbManager, ReverbSide, Client, Server
 
-server = Server(host="", port=4444)
-server.start_server()
-```
-This gonna start ther server
+# Choose side (for example via input)
+ReverbManager.REVERB_SIDE = ReverbSide.SERVER  # or ReverbSide.CLIENT
+````
 
-### Sending message to all clients:
-```python
-server.send_to_all("hello_server", "Hello from the server")
-```
-This will gonna send the packet with the name "hello" to all clients.
+---
 
-### Receving event from a client:
-```python
-@server_event_registery.on_event("hello_client")
-def hello_client(clt, msg, *args):
-  print(f"the client:{clt.getpeername()} have seent a msg: {msg}")
-```
-
-### To stop the server:
-```python
-server.stop_server()
-```
-This will be trigger each tiME the client send a message with packet name: "hello_client"
-
-## Client Side:
-### Connect with a client:
+### 2) Create a ReverbObject
 
 ```python
-from reverb_base import Client, client_event_registery
+from reverb import ReverbManager, ReverbObject
 
-client = client(ip="127.0.0.1", port=4444)
-client.connect()  # connecting to the server
+@ReverbManager.reverb_object_attribute
+class Player(ReverbObject):
+    def __init__(self, x=0, y=0, uid=None, add_on_init=True, belonging_membership=None):
+        self.x = x
+        self.y = y
+        super().__init__(x, y, uid=uid, add_on_init=add_on_init, belonging_membership=belonging_membership)
+
+    # Optional: called on client when object is created locally
+    def on_init_from_client(self):
+        pass
+
+    # Optional: called on server when object is created
+    def on_init_from_server(self):
+        pass
 ```
 
-### To send a msg/data:
+---
+
+### 3) Start the Server
+
 ```python
-client.send("hello_client", "Hello from the client")
+if ReverbManager.REVERB_SIDE == ReverbSide.SERVER:
+    serv = Server(port=8080)
+    ReverbManager.REVERB_CONNECTION = serv
+    serv.start_server()
+
+    # Create objects on the server
+    player = Player(x=10, y=20)
+
+    # Main loop
+    while True:
+        # Synchronize objects to clients
+        ReverbManager.server_sync()
 ```
 
-### Receving event from the server:
+---
+
+### 4) Start a Client
+
 ```python
-@client_event_registery.on_event("hello_server")
-def hello_server(clt, msg, *args):
-  print(f"You rcved a msg: {msg}")
+if ReverbManager.REVERB_SIDE == ReverbSide.CLIENT:
+    clt = Client(ip="127.0.0.1", port=8080)
+    ReverbManager.REVERB_CONNECTION = clt
+    clt.connect()
+
+    # Main loop
+    while True:
+        # Access synchronized objects
+        for p in ReverbManager.get_all_ro_by_type(Player):
+            print(p.x, p.y)
 ```
 
-### Disconnecting the client:
+---
+
+## 🧠 How It Works
+
+### 🔹 1. `ReverbObject`
+
+The base class for all synchronized objects.
+It contains:
+
+* Object variables (defined in `__init__`)
+* A unique `uid`
+* `belonging_membership` = client port owning the object
+* Optional callbacks:
+
+  * `on_init_from_server()`
+  * `on_init_from_client()`
+
+### 🔹 2. `ReverbManager`
+
+* Tracks all ReverbObjects (`REVERB_OBJECTS`)
+* Stores side (SERVER or CLIENT)
+* Synchronizes objects (`server_sync()`)
+* Automatically creates objects on the client
+* Allows clients to call server functions (`compute_server()`)
+
+### 🔹 3. Network Events
+
+* `server_event_registry` → server-side events (e.g., client connection)
+* `client_event_registry` → client-side events (e.g., object sync, disconnect)
+* Easily extendable using decorators `@...on_event("...")`
+
+---
+
+## 🔁 Automatic Synchronization
+
+Server-side:
+
 ```python
-client.disconnect()
+ReverbManager.server_sync()
 ```
 
+→ Sends the state of all objects to all clients
 
+Client-side:
 
+The `"server_sync"` event automatically updates or creates objects locally.
 
+---
+
+## 📡 Server Function Call (RPC)
+
+```python
+# Client-side
+obj.compute_server(obj.my_func, arg1, arg2)
+```
+
+→ Executes `obj.my_func(arg1, arg2)` on the server.
+
+---
+
+## ✅ Check Object Ownership
+
+```python
+if obj.is_owner():
+    # This client controls the object
+```
+
+---
+
+## ⚠️ Current Limitations
+
+❌ No advanced network error handling
+❌ No compression or delta-sync (full state sent each sync)
+❌ No authentication or data security
+❌ No latency handling or interpolation
+❌ Single listener thread per client (no advanced optimizations)
+
+---
+
+## 📝 TODO / Possible Improvements
+
+* [ ] Create a pip package
+* [ ] Add client-side interpolation
+* [ ] Optimize synchronizations (deltas, priorities, frequency)
+* [ ] Authentication / network security
+* [ ] Logging and monitoring
+* [ ] Debugging tools (object viewer)
+* [ ] Room / channel management
+* [ ] Protocol versioning / compatibility
+
+---
+
+## 🙌 Contribution
+
+This project is in active development.
+Feedback, suggestions, and contributions are welcome!
+
+```
+
+Do you want me to do that?
+```
